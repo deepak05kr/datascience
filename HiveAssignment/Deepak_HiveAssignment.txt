@@ -1,0 +1,306 @@
+drop database if exists deepak cascade;
+CREATE DATABASE deepak
+
+drop  table if exists deepak.data_dec_2017 ;
+create external table if not exists deepak.data_dec_2017 
+(VendorID int,tpep_pickup_datetime timestamp,tpep_dropoff_datetime timestamp,passenger_count int,trip_distance double,RatecodeID int,
+store_and_fwd_flag string,PULocationID int,DOLocationID int,payment_type int,fare_amount double,extra double,mta_tax double,
+tip_amount double,tolls_amount double,improvement_surcharge double,total_amount double)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+LOCATION 's3://data-science-deepak/'
+tblproperties ("skip.header.line.count"="2");
+
+--select * from data_dec_2017 limit 100;
+
+drop  table if exists deepak.data_nov_2017 ;
+create external table if not exists deepak.data_nov_2017 
+(VendorID int,tpep_pickup_datetime timestamp,tpep_dropoff_datetime timestamp,passenger_count int,trip_distance double,RatecodeID int,
+store_and_fwd_flag string,PULocationID int,DOLocationID int,payment_type int,fare_amount double,extra double,mta_tax double,
+tip_amount double,tolls_amount double,improvement_surcharge double,total_amount double)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+LOCATION 's3://data-science-deepak/'
+tblproperties ("skip.header.line.count"="2");
+
+--select * from data_nov_2017 limit 100;
+
+create external table if not exists deepak.combined_data like deepak.data_dec_2017 ;
+
+insert into deepak.combined_data  select VendorID ,
+tpep_pickup_datetime ,tpep_dropoff_datetime ,passenger_count ,trip_distance ,RatecodeID ,store_and_fwd_flag ,PULocationID ,
+DOLocationID ,payment_type ,fare_amount ,extra ,mta_tax ,tip_amount ,tolls_amount ,improvement_surcharge ,total_amount 
+from deepak.data_nov_2017;
+
+insert into deepak.combined_data  select VendorID ,
+tpep_pickup_datetime ,tpep_dropoff_datetime ,passenger_count ,trip_distance ,RatecodeID ,store_and_fwd_flag ,PULocationID ,
+DOLocationID ,payment_type ,fare_amount ,extra ,mta_tax ,tip_amount ,tolls_amount ,improvement_surcharge ,total_amount 
+from deepak.data_dec_2017;
+
+--select count(VendorID) from deepak.combined_data; 
+--select count(VendorID) from deepak.data_nov_2017; 
+--select count(VendorID) from deepak.data_dec_2017; 
+
+---------------------------------------------------
+---------------------------------------------------
+--How many records has each TPEP provider provided? Write a query that summarises the number of records of each provider.
+select VendorID,count(1) as vendorid_count from deepak.combined_data group by vendorid;
+
+--The data provided is for months November and December only. Check whether the data is consistent, and if not, identify the data quality issues. Mention all data quality issues in comments.
+--  vendorId is null 
+select count(1) from deepak.combined_data where vendorID is null; --  5646168
+--  validation for pickup time and drop time for year 2017
+select temp.yearNum, temp.monthNum from 
+(select distinct year(tpep_pickup_datetime) as yearNum,month(tpep_pickup_datetime) as monthNum from deepak.combined_data) temp
+where temp.yearNum!=2017 ;
+--temp.yearnum	temp.monthnum
+--2041	11
+--2018	2
+--2003	1
+--2009	1
+--2018	1
+--2001	1
+--2008	12
+--2018	3
+
+--  invalid tipCount value 390
+select count(1) as invalidTipCount from deepak.combined_data where tip_amount<0;
+-- passenger_count should not be -ve, but we have passenger_count as null and 0. for NULL count is	5646764 
+select passenger_count,count(1) as numOfTravel from deepak.combined_data group by passenger_count;
+--  number of invalid trips -- 480086
+select trip_distance,count(1) as invalidTripCount from deepak.combined_data where
+trip_distance <=0 group by trip_distance;
+--  invalid ExraCount value 19344
+select count(1) as invalidExraCount from deepak.combined_data where extra<0;
+
+select count(1) as invalidSurchargeCount from deepak.combined_data where improvement_surcharge<0; --37474
+
+select count(1) as invalidTotalAmountCount from deepak.combined_data where total_amount<0; -- 37488
+
+select count(1) as invalidTollAmount from deepak.combined_data where tolls_amount<0; -- 166
+
+select count(1) as invalidMTCCount from deepak.combined_data where mta_tax<0; -- 36372
+
+--  Invalid fare count value 58294
+select count(1) as invalidFareCount from deepak.combined_data where  fare_amount<=0;
+
+-- NULL payment_type count is	6645059
+select payment_type,count(1) as paymenttypecount from deepak.combined_data group by payment_type; 
+
+-----------------------------------------------------------------------------------------------
+-- Analysis-I
+-----------------------------------------------------------------------------------------------
+
+--1. Compare the average fare for November and December.
+select avg(fare_amount), year(tpep_pickup_datetime),month(tpep_pickup_datetime) from deepak.combined_data 
+ where fare_amount > 0 and year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12) group by year(tpep_pickup_datetime),month(tpep_pickup_datetime);
+
+--Average fare_amount in Nov- 13.15503247231986
+--Average fare_amount in Dec- 12.950125139151167
+
+-- 2. Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? 
+-- Do most people travel solo or with other people?
+
+select passenger_count,count(1) as tripCount from deepak.combined_data 
+where passenger_count > 0 and year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12) 
+group by passenger_count order by passenger_count;
+
+--	passenger_count	tripcount	
+--1	53004188	
+--2	11264468	
+--3	3243068	
+--4	1595384	
+--5	3503292	
+--6	2124008	
+--7	300	
+--8	240	
+--9	224	
+--192	4	
+
+-- so maximum number of people like to travel solo
+
+-- 3. Which is the most preferred mode of payment?
+
+select payment_type,count(1) as paymentTypeCount from deepak.combined_data 
+where payment_type > 0 and year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12) 
+group by payment_type order by paymentTypeCount desc;
+
+--	payment_type	paymenttypecount	
+--1	50554068	
+--2	24104752	
+--3	402120	
+--4	110116	
+-- so most preferred payment type is Credit card
+
+-- 4. What is the average tip paid? Compare the average tip with the 25th, 50th and 75th percentiles and comment whether the 
+--‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’.
+
+select avg(tip_amount),percentile_approx(tip_amount,0.25),percentile_approx(tip_amount,0.50),
+percentile_approx(tip_amount,0.75)  from deepak.combined_data where tip_amount>0 and  year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12);
+
+--	_c0	_c1	_c2	_c3	
+-- 2.8738558848740245	1.45	2.041712336033746	3.16	
+-- there is too much difference between avg value 2.87 and 50th percentile value 2.04, so avg is not a good representative
+
+-- 5. Explore the ‘Extra’ (charge) variable - what is the fraction of total trips where an extra charge is levied?
+select count(1) as totalNumOftrips from deepak.combined_data
+where  year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12) and extra >=0;
+--Total count of trips = 75151716
+select count(1) as extra_charged_trips from deepak.combined_data
+where  year(tpep_pickup_datetime)=2017 
+and month(tpep_pickup_datetime) in(11,12) and extra >0;
+
+
+--Total count of trips where extra was charged =34713292
+--Fraction of trips where extra is charged = 34713292/75151716 equals 0.462
+
+
+
+---------------------------------------------------------------
+-- Analysis-II
+---------------------------------------------------------------
+
+-- 1. What is the correlation between the number of passengers and tip paid? 
+-- Do multiple travellers pay more compared to solo travellers?
+
+select corr(passenger_count,tip_amount) from deepak.combined_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) and passenger_count>0 
+and tip_amount>=0;
+-- correlation value between the number of passengers and tip paid is -0.004079560302192025, so there is no correlation
+
+-- avg tip_amount when solo passenger travels is 1.8580293816916897
+select avg(tip_amount) from deepak.combined_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) and passenger_count=1 and tip_amount>=0;
+
+-- avg tip_amount when number of passenger is more than 1 is 1.8346121135550713
+select avg(tip_amount) from deepak.combined_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) and passenger_count>1 and tip_amount>=0;
+
+-- so there is not much difference in tip_amount based on number of travellers
+
+-- 2. Create five buckets of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+-- Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+
+select count(1) as totalTipCount from deepak.combined_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12)  and tip_amount>0;
+-- totalTipCount is 48408520
+select case 
+		when tip_amount < 5 and tip_amount >= 0  then '0_to_5'
+		when tip_amount < 10 and tip_amount >= 5 then '5_to_10'
+		when tip_amount < 15 and tip_amount >= 10  then '10_to_15'
+		when tip_amount < 20 and tip_amount >= 15  then '15_to_20'
+		else 'more_than_20'
+		end as bucketRange,
+	count(1) as bucket_bins,
+	count(1) * 100 /48408520  as PercentageShare
+from deepak.combined_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) and tip_amount>0
+group by case 
+		when tip_amount < 5 and tip_amount >= 0  then '0_to_5'
+		when tip_amount < 10 and tip_amount >= 5 then '5_to_10'
+		when tip_amount < 15 and tip_amount >= 10  then '10_to_15'
+		when tip_amount < 20 and tip_amount >= 15  then '15_to_20'
+		else 'more_than_20'
+		end order by bucketRange;
+		
+		
+--	bucketrange	bucket_bins	percentageshare	
+--0_to_5	42501268	87.79708200126754	
+--10_to_15	1413780	2.920518949969964	
+--15_to_20	180516	0.37290129919278675	
+--5_to_10	4234252	8.746914799295661	
+--more_than_20	78704	0.16258295027404268	
+
+		
+-- 3. Which month has a greater average ‘speed’ - November or December? 
+--Note that the variable ‘speed’ will have to be derived from other metrics.
+select month(tpep_pickup_datetime),avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) as avgSpeed
+from deepak.combined_data where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) 
+and trip_distance >0 group by month(tpep_pickup_datetime);
+
+--	_c0	avgspeed	
+--11	12.830641653172934	
+--12	12.77426931797914	
+
+-- average speed is higher in month of November 
+
+-- 4. Analyse the average speed of the most happening days of the year 
+--i.e. 31st December (New year’s eve) and 25th December (Christmas Eve) and compare it with the overall average. 
+
+select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) as 
+avgerageSpeed from deepak.combined_data where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) 
+and trip_distance >0;
+
+--Overall average is 12.802116740784129
+
+select month(tpep_pickup_datetime), day(tpep_pickup_datetime),avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) as avgSpeed 
+from deepak.combined_data where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in(11,12) and 
+trip_distance>0 group by month(tpep_pickup_datetime), day(tpep_pickup_datetime) order by avgSpeed desc;
+
+-- 25 Dec has maximum average speed, 2nd is 23rd Dec
+
+--	_c0	_c1	avgspeed	
+--12	25	16.856755916401447	
+--11	23	16.36488071213245	
+--11	26	16.16008881985784	
+--11	5	15.242629917679174	
+--12	24	15.175606940251246	
+--11	12	15.158981799409379	
+--12	10	14.941767580695847	
+--11	25	14.752439783349882	
+--12	3	14.533174074395612	
+--12	30	14.513370879492081	
+--11	19	14.262424441566306	
+--12	31	14.12096398259002	
+--12	23	14.035275990473124	
+--12	29	13.910880699690866	
+--11	27	13.87168683920351	
+--12	26	13.841793599705067	
+--12	17	13.818216549227643	
+--11	24	13.805675866711274	
+--11	6	13.425141291477273	
+--12	11	13.150901117651904	
+--12	27	13.113846948821775	
+--11	13	13.037529474420728	
+--12	22	12.948264978110142	
+--11	11	12.941719482493136	
+--11	18	12.8550526927414	
+--12	18	12.741276530559542	
+--12	4	12.63774435481689	
+--11	4	12.444151997026356	
+--11	8	12.414745906435487	
+--12	20	12.400092684943168	
+--12	9	12.28093855313569	
+--11	29	12.280089161775715	
+--11	3	12.275879308809179	
+--12	28	12.27146205903301	
+--11	21	12.264659001186134	
+--12	6	12.235224829457684	
+--12	7	12.199080659843666	
+--11	17	12.168601777840582	
+--12	16	12.142529323575925	
+--12	2	12.117234622572152	
+--11	10	12.11633486392842	
+--12	1	12.106244283015313	
+--11	20	12.078520020396745	
+--12	8	12.07152181252817	
+--11	14	12.055132086790543	
+--12	19	12.034388511037152	
+--11	9	12.008206890818162	
+--11	2	11.996102072210682	
+--11	1	11.989100665189747	
+--11	16	11.855503277097654	
+--11	28	11.853276367952553	
+--11	22	11.849584202163141	
+--12	21	11.848145183174218	
+--12	15	11.80679887988074	
+--11	7	11.803375860764076	
+--11	15	11.78783135282682	
+--12	12	11.723441337860189	
+--12	13	11.647382782822358	
+--11	30	11.603946968812457	
+--12	5	11.320186333538743	
+--12	14	11.257576031971107	

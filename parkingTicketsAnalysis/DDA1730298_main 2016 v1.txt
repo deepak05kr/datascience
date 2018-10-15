@@ -1,0 +1,475 @@
+library(SparkR)
+sparkR.session(master='local')
+library(ggplot2)
+parking2016<- read.df("s3://upgradkumar2018/Parking_Violations_Issued_-_Fiscal_Year_2016.csv",source = "com.databricks.spark.csv", header="true",inferSchema = "true")
+
+#Q1 Find total number of tickets for each year.
+nrow(parking2016)
+#10626899
+
+#EDA
+# Ignore Output in this file verify with PDF
+#Unique Rows in 2015
+parking2016clean<-unique(parking2016)
+nrow(parking2016clean)
+#10626899
+#persist data to memory
+persist(parking2016clean, "MEMORY_ONLY")
+dim(parking2016clean)
+#10626899       51
+parking2016clean<-withColumnRenamed(parking2016clean,"Summons Number","SummonsNumber")
+dropDuplicates(parking2016clean,"SummonsNumber")
+nrow(parking2016clean)
+#10626899
+#Column Rename for space between columns removal
+
+
+parking2016clean<-withColumnRenamed(parking2016clean,"Violation Time","ViolationTime")
+parking2016clean<-withColumnRenamed(parking2016clean,"Violation Code","ViolationCode")
+parking2016clean<-withColumnRenamed(parking2016clean,"Registration State","RegistrationState")
+parking2016clean<-withColumnRenamed(parking2016clean,"Street Name","StreetName")
+parking2016clean<-withColumnRenamed(parking2016clean,"Registration State","RegistrationState")
+parking2016clean<-withColumnRenamed(parking2016clean,"Plate ID","PlateID")
+parking2016clean<-withColumnRenamed(parking2016clean,"Plate Type","PlateType")
+parking2016clean<-withColumnRenamed(parking2016clean,"Issue Date","IssueDate")
+parking2016clean<-withColumnRenamed(parking2016clean,"Violation Code","ViolationCode")
+parking2016clean<-withColumnRenamed(parking2016clean,"Vehicle Body Type","VehicleBodyType")
+parking2016clean<-withColumnRenamed(parking2016clean,"Vehicle Make","VehicleMake")
+
+parking2016clean<-withColumnRenamed(parking2016clean,"Issuer Precinct","IssuerPrecinct")
+parking2016clean<-withColumnRenamed(parking2016clean,"Violation Precinct","ViolationPrecinct")
+
+
+
+#Q2 Find out how many unique states the cars which got parking tickets came from.
+
+createOrReplaceTempView(parking2016clean, "parkingcleantbl2016")
+parking2016cleanstates <- SparkR::sql("SELECT distinct(RegistrationState) FROM parkingcleantbl2016 order by RegistrationState")
+
+head(parking2016cleanstates,nrow(parking2016cleanstates))
+
+#Q3 Some parking tickets don’t have addresses on them, which is cause for concern. Find out how many such tickets there are.
+
+
+createOrReplaceTempView(parking2016clean, "parkingnoaddrtbl2016")
+parking2016cleannoaddr <- SparkR::sql("SELECT count(*) FROM parkingnoaddrtbl2016 where StreetName is null ")
+head(parking2016cleannoaddr)
+#5463
+
+###Aggregation Tasks
+
+#Q1 How often does each violation code occur? (frequency of violation codes - find the top 5)
+
+parking2016cleanvctop5<-summarize(groupBy(parking2016clean, parking2016clean$ViolationCode),count=n(parking2016clean$ViolationCode)/(365*24))
+
+parking2016cleanvctop5sorted<-head(arrange(parking2016cleanvctop5, desc(parking2016cleanvctop5$count)),5)
+parking2016cleanvctop5sorted
+
+parking2016cleanvctop5sortedgg<-arrange(parking2016cleanvctop5, desc(parking2016cleanvctop5$count))
+ggparking2016cleanvctop5sorted<-collect(select(parking2016cleanvctop5sortedgg,parking2016cleanvctop5sortedgg$ViolationCode,parking2016cleanvctop5sortedgg$count))
+
+ggparking2016cleanvctop5sorted1<-ggparking2016cleanvctop5sorted[1:5,]
+ggplot(data=ggparking2016cleanvctop5sorted1,aes(x=ViolationCode,y=count)) + geom_bar(stat='identity',width=0.8,position="dodge")+geom_text(aes(label=count))
+
+
+#ViolationCode     count
+#1            21 171.41712
+#2            38 151.20845
+#3            14 105.55103
+#4            36  86.93733
+#5            37  85.19155
+
+
+#Q2 How often does each vehicle body type get a parking ticket? How about the vehicle make? (find the top 5 for both)
+
+
+parking2016cleanvbtop5<-summarize(groupBy(parking2016clean, parking2016clean$VehicleBodyType),count=n(parking2016clean$VehicleBodyType)/(365*24))
+
+parking2016cleanvbtop5sorted<-head(arrange(parking2016cleanvbtop5, desc(parking2016cleanvbtop5$count)),5)
+parking2016cleanvbtop5sorted
+
+parking2016cleanvbtop5sortedgg<-arrange(parking2016cleanvbtop5, desc(parking2016cleanvbtop5$count))
+ggparking2016cleanvbtop5sorted<-collect(select(parking2016cleanvbtop5sortedgg,parking2016cleanvbtop5sortedgg$VehicleBodyType,parking2016cleanvbtop5sortedgg$count))
+
+ggparking2016cleanvbtop5sorted1<-ggparking2016cleanvbtop5sorted[1:5,]
+ggplot(data=ggparking2016cleanvbtop5sorted1,aes(x=VehicleBodyType,y=count)) + geom_bar(stat='identity',width=0.8,position="dodge")+geom_text(aes(label=count))
+
+
+
+VehicleBodyType     count
+1            SUBN 394.05970
+2            4DSD 354.16781
+3             VAN 183.24521
+4            DELV  95.94087
+5             SDN  51.82557
+
+parking2016cleanvmtop5<-summarize(groupBy(parking2016clean, parking2016clean$VehicleMake),count=n(parking2016clean$VehicleMake)/(365*24))
+head(arrange(parking2016cleanvmtop5, desc(parking2016cleanvmtop5$count)),5)
+
+VehicleMake    count
+1        FORD 161.7926
+2       TOYOT 128.2561
+3       HONDA 116.2156
+4       NISSA  95.6129
+5       CHEVR  95.4782
+
+
+#Q3 A precinct is a police station that has a certain zone of the city under its command. Find the (5 highest) frequencies of:
+#Violating Precincts (this is the precinct of the zone where the violation occurred)
+#Issuing Precincts (this is the precinct that issued the ticket)
+
+parking2016cleanprecinct<-summarize(groupBy(parking2016clean, parking2016clean$ViolationPrecinct),count=n(parking2016clean$ViolationPrecinct))
+parking2016cleanprecinctsort<-head(arrange(parking2016cleanprecinct, desc(parking2016cleanprecinct$count)),5)
+parking2016cleanprecinctsort
+
+#ViolationPrecinct   count
+#1                 0 1633006
+#2                19  559716
+#3                18  400887
+#4                14  384596
+#5                 1  307808
+
+parking2016cleanissueprecinct<-summarize(groupBy(parking2016clean, parking2016clean$IssuerPrecinct),count=n(parking2016clean$IssuerPrecinct))
+parking2016cleanissueprecinctsort<-head(arrange(parking2016cleanissueprecinct, desc(parking2016cleanissueprecinct$count)),5)
+parking2016cleanissueprecinctsort
+
+#IssuerPrecinct   count
+#1              0 1834343
+#2             19  544946
+#3             18  391501
+#4             14  369725
+#5              1  298594
+
+parking2016clean3precinct<-filter(parking2016clean,parking2016clean$IssuerPrecinct==0 | parking2016clean$IssuerPrecinct==19 | parking2016clean$IssuerPrecinct==18)
+nrow(parking2016clean3precinct)
+
+parking2016cleanprecinctvctop3<-summarize(groupBy(parking2016clean3precinct, parking2016clean3precinct$ViolationCode),count=n(parking2016clean3precinct$ViolationCode))
+parking2016cleanprecinctvctop3sort<-head(arrange(parking2016cleanprecinctvctop3, desc(parking2016cleanprecinctvctop3$count)),3)
+parking2016cleanprecinctvctop3sort
+
+#ViolationCode  count
+#1            36 761571
+#2             7 662203
+#3            21 240604
+
+persist(parking2016clean3precinct, "MEMORY_ONLY")
+nrow(parking2016clean3precinct)
+
+parking2016clean3precinctviolation<-filter(parking2016clean,parking2016clean$ViolationPrecinct==0 | parking2016clean$ViolationPrecinct==19 | parking2016clean$ViolationPrecinct==18)
+nrow(parking2016clean3precinctviolation)
+
+parking2016clean3precinctviolationvctop3<-summarize(groupBy(parking2016clean3precinctviolation, parking2016clean3precinctviolation$ViolationCode),count=n(parking2016clean3precinctviolation$ViolationCode))
+parking2016clean3precinctviolationvctop3sort<-head(arrange(parking2016clean3precinctviolationvctop3, desc(parking2016clean3precinctviolationvctop3$count)),3)
+parking2016clean3precinctviolationvctop3sort
+
+# ViolationCode  count
+#1            36 761571
+#2             7 662204
+#3             5 195354
+
+#Q4 Find the violation code frequency across 3 precincts which have issued the most number of tickets - do these precinct zones have an exceptionally high frequency of certain violation #codes? Are these codes common across precincts?
+
+parking2016cleanviolationprecinctvc3<-filter(parking2016clean,parking2016clean$ViolationCode==36 | parking2016clean$ViolationCode==7 | parking2016clean$ViolationCode==5)
+nrow(parking2016cleanviolationprecinctvc3)
+
+parking2016cleanviolationprecinctvc3all<-summarize(groupBy(parking2016cleanviolationprecinctvc3, parking2016cleanviolationprecinctvc3$ViolationPrecinct),count=n(parking2016cleanviolationprecinctvc3$ViolationCode))
+
+parking2016cleanviolationprecinctvc3allsort<-head(arrange(parking2016cleanviolationprecinctvc3all, desc(parking2016cleanviolationprecinctvc3all$count)),nrow(parking2016cleanviolationprecinctvc3all))
+parking2016cleanviolationprecinctvc3allsort
+
+
+#ViolationPrecinct   count
+#1                  0 1619126
+#2                 25       9
+#3                 18       3
+#4                104       3
+#5                  7       2
+#6                106       2
+#7                 14       2
+#8                 26       1
+#9                 44       1
+#10               122       1
+#11                47       1
+#12                 1       1
+#13                13       1
+#14                48       1
+#15                41       1
+#16                33       1
+#17                10       1
+#18                77       1
+#19               102       1
+#20                50       1
+#21               113       1
+#22               121       1
+#23                75       1
+#24                71       1
+#25               123       1
+#26               901       1
+#27                66       1
+
+#Q5 You’d want to find out the properties of parking violations across different times of the day:
+#The Violation Time field is specified in a strange format. Find a way to make this into a time attribute that you can use to divide into groups.
+
+#Find a way to deal with missing values, if any.
+
+#Divide 24 hours into 6 equal discrete bins of time. The intervals you choose are at your discretion. For each of these groups, find the 3 most commonly occurring violations
+
+#Now, try another direction. For the 3 most commonly occurring violation codes, find the most common times of day (in terms of the bins from the previous part)
+
+
+parking2016vtbin<-mutate(parking2016clean,vhr=substr(parking2016clean$ViolationTime,1,2),ampm=substr(parking2016clean$ViolationTime,6,6))
+parking2016vtbin<-mutate(parking2016vtbin,vhr24=cast(parking2016vtbin$vhr,"integer"))
+parking2016vtbin$vhr24<-ifelse(parking2016vtbin$ampm=="A",parking2016vtbin$vhr24,parking2016vtbin$vhr24+12)
+
+createOrReplaceTempView(parking2016vtbin, "parking2016vhrtbl")
+
+bins1_2016 <- SparkR::sql("SELECT ViolationCode, vhr24, \
+                   CASE  WHEN (vhr24>=0  and vhr24<4)  THEN 1\
+                   WHEN (vhr24>=4  and vhr24<8) THEN 2\
+                   WHEN (vhr24>=8  and vhr24<12) THEN 3\
+                   WHEN (vhr24>=12  and vhr24<16) THEN 4\
+ 		   WHEN (vhr24>=16  and vhr24<20) THEN 5\
+                   ELSE 6 END  as bin_number FROM parking2016vhrtbl")
+
+
+
+
+
+
+bins1vcall2016<-summarize(groupBy(bins1_2016, bins1_2016$bin_number,bins1_2016$ViolationCode),count=n(bins1_2016$ViolationCode))
+
+bins1vcall2016sorted<-head(arrange(bins1vcall2016, desc(bins1vcall2016$count)))
+bins1vcall2016sorted
+
+bins1vcall2016sortedgg<-arrange(bins1vcall2016, desc(bins1vcall2016$count))
+ggbins1vcall2016sorted<-collect(select(bins1vcall2016sortedgg,bins1vcall2016sortedgg$bin_number,bins1vcall2016sortedgg$ViolationCode,bins1vcall2016sortedgg$count))
+
+ggplot(data=ggbins1vcall2016sorted,aes(x=bin_number,y=count,fill=ViolationCode)) + geom_bar(stat='identity',width=0.8,position="dodge")+scale_x_continuous(breaks=seq(1,6,1))
+ggplot(data=ggbins1vcall2016sorted,aes(x=ViolationCode,y=count,fill=bin_number)) + geom_bar(stat='identity',width=0.8,position="dodge")+scale_x_continuous(breaks=seq(1,100,5))
+
+
+bin_number ViolationCode   count
+1          3            21 1209243
+2          6            38  753002
+3          6            36  586923
+4          3            36  586791
+5          6            37  562029
+6          6            14  427451
+
+persist(bins1vcall2016, "MEMORY_ONLY")
+dim(bins1vcall2016)
+
+bins1vcallbin1_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==1)
+bins1vcallbin1A_2016<-head(arrange(bins1vcallbin1_2016, desc(bins1vcallbin1_2016$count)),3)
+bins1vcallbin1A_2016
+
+bin_number ViolationCode count
+1          1            21 67798
+2          1            40 37261
+3          1            78 29473
+
+bins1vcallbin2_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==2)
+bins1vcallbin2A_2016<-head(arrange(bins1vcallbin2_2016, desc(bins1vcallbin2_2016$count)),3)
+bins1vcallbin2A_2016
+
+bin_number ViolationCode  count
+1          2            14 140111
+2          2            21 114029
+3          2            40  91692
+
+bins1vcallbin3_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==3)
+bins1vcallbin3A_2016<-head(arrange(bins1vcallbin3_2016, desc(bins1vcallbin3_2016$count)),3)
+bins1vcallbin3A_2016
+
+bin_number ViolationCode   count
+1          3            21 1209243
+2          3            36  586791
+3          3            38  388099
+
+
+bins1vcallbin4_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==4)
+bins1vcallbin4A_2016<-head(arrange(bins1vcallbin4_2016, desc(bins1vcallbin4_2016$count)),3)
+bins1vcallbin4A_2016
+
+bin_number ViolationCode count
+1          4             7  9040
+2          4            40  4837
+3          4            21  4311
+
+
+bins1vcallbin5_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==5)
+bins1vcallbin5A_2016<-head(arrange(bins1vcallbin5_2016, desc(bins1vcallbin5_2016$count)),3)
+bins1vcallbin5A_2016
+
+bin_number    ViolationCode count        
+<0 rows> (or 0-length row.names)
+
+bins1vcallbin6_2016<-filter(bins1vcall2016,bins1vcall2016$bin_number==6)
+bins1vcallbin6A_2016<-head(arrange(bins1vcallbin6_2016, desc(bins1vcallbin6_2016$count)),3)
+bins1vcallbin6A_2016
+
+ bin_number ViolationCode  count
+1          6            38 753002
+2          6            36 586923
+3          6            37 562029
+
+
+
+#38 2
+#21 4
+#40 3
+
+#14 1
+#40 3
+#37 2
+
+
+bins1vc38_2016<-filter(bins1vcall2016,bins1vcall2016$ViolationCode==38)
+bins1vc38bins_2016<-head(arrange(bins1vc38_2016, desc(bins1vc38_2016$count)),3)
+bins1vc38bins_2016
+
+# bin_number ViolationCode  count
+bin_number ViolationCode  count
+1          6            38 753002
+2          3            38 388099
+3          2            38   2211
+
+bins1vc21_2016<-filter(bins1vcall2016,bins1vcall2016$ViolationCode==21)
+bins1vc21bins_2016<-head(arrange(bins1vc21_2016, desc(bins1vc21_2016$count)),3)
+bins1vc21bins_2016
+
+ bin_number ViolationCode   count
+1          3            21 1209243
+2          6            21  136206
+3          2            21  114029
+
+
+bins1vc40_2016<-filter(bins1vcall2016,bins1vcall2016$ViolationCode==40)
+bins1vc40bins_2016<-head(arrange(bins1vc40_2016, desc(bins1vc40_2016$count)),3)
+bins1vc40bins_2016
+
+bin_number ViolationCode  count
+1          6            40 208833
+2          3            40 119898
+3          2            40  91692
+
+#Q6 Let’s try and find some seasonality in this data
+
+#First, divide the year into some number of seasons, and find frequencies of tickets for each season.
+
+#Then, find the 3 most common violations for each of these season
+
+parking2016vidm<-mutate(parking2016clean,vidmonth=cast(substr(parking2016clean$IssueDate,1,2),"integer"))
+createOrReplaceTempView(parking2016vidm, "parking2016vidseasontbl")
+
+seasonbins_2016 <- SparkR::sql("SELECT ViolationCode, vidmonth, \
+                   CASE  WHEN (vidmonth>=1  and vidmonth<4)  THEN 1\
+                   WHEN (vidmonth>=4  and vidmonth<7) THEN 2\
+                   WHEN (vidmonth>=7  and vidmonth<10) THEN 3\
+                   WHEN (vidmonth>=10  and vidmonth<=12) THEN 4\
+ 		   ELSE 5 END  as seasonbin_number FROM parking2016vidseasontbl")
+seasonbinsvcall_2016<-summarize(groupBy(seasonbins_2016, seasonbins_2016$seasonbin_number),count=n(seasonbins_2016$ViolationCode))
+head(arrange(seasonbinsvcall_2016, desc(seasonbinsvcall_2016$count)))
+
+
+seasonbinspervc_2016<-summarize(groupBy(seasonbins_2016, seasonbins_2016$seasonbin_number,seasonbins_2016$ViolationCode),count=n(seasonbins_2016$ViolationCode))
+head(arrange(seasonbinspervc_2016, desc(seasonbinspervc_2016$seasonbin_number)),nrow(seasonbinspervc_2016))
+
+
+seasonbinsvcall_2016<-summarize(groupBy(seasonbins_2016, seasonbins_2016$seasonbin_number),count=n(seasonbins_2016$ViolationCode))
+
+seasonbinsvcall_2016sorted<-head(arrange(seasonbinsvcall_2016, desc(seasonbinsvcall_2016$count)))
+seasonbinsvcall_2016sorted
+
+seasonbinsvcall_2016sortedgg<-arrange(seasonbinsvcall_2016, desc(seasonbinsvcall_2016$count))
+ggseasonbinsvcall_2016sorted<-collect(select(seasonbinsvcall_2016sortedgg,seasonbinsvcall_2016sortedgg$seasonbin_number,seasonbinsvcall_2016sortedgg$count))
+
+ggplot(data=ggseasonbinsvcall_2016sorted,aes(x=seasonbin_number,y=count)) + geom_bar(stat='identity',width=0.8,position="dodge")+scale_x_continuous(breaks=seq(1,6,1))
+
+
+seasonbinspervc_2016<-summarize(groupBy(seasonbins_2016, seasonbins_2016$seasonbin_number,seasonbins_2016$ViolationCode),count=n(seasonbins_2016$ViolationCode))
+
+seasonbinspervc_2016sorted<-head(arrange(seasonbinspervc_2016, desc(seasonbinspervc_2016$seasonbin_number)),nrow(seasonbinspervc_2016))
+seasonbinspervc_2016sorted
+
+seasonbinspervc_2016sortedgg<-arrange(seasonbinspervc_2016, desc(seasonbinspervc_2016$seasonbin_number))
+ggseasonbinspervc_2016sorted<-collect(select(seasonbinspervc_2016sortedgg,seasonbinspervc_2016sortedgg$seasonbin_number,seasonbinspervc_2016sortedgg$ViolationCode,seasonbinspervc_2016sortedgg$count))
+
+ggplot(data=ggseasonbinspervc_2016sorted,aes(x=seasonbin_number,y=count,fill=ViolationCode)) + geom_bar(stat='identity',width=0.8,position="dodge")+scale_x_continuous(breaks=seq(1,6,1))
+ggplot(data=ggseasonbinspervc_2016sorted,aes(x=ViolationCode,y=count,fill=seasonbin_number)) + geom_bar(stat='identity',width=0.8,position="dodge")+scale_x_continuous(breaks=seq(1,100,5))
+
+
+
+persist(seasonbinspervc_2016, "MEMORY_ONLY")
+nrow(seasonbinspervc_2016)
+
+seasonbinsperbin1_2016<-filter(seasonbinspervc_2016,seasonbinspervc_2016$seasonbin_number==1)
+seasonbinsperbin1A_2016<-head(arrange(seasonbinsperbin1_2016, desc(seasonbinsperbin1_2016$count)),3)
+seasonbinsperbin1A_2016
+
+#seasonbin_number ViolationCode  count
+#1                1            38 336762
+#2                1            21 281600
+#3                1            14 220029
+
+seasonbinsperbin2_2016<-filter(seasonbinspervc_2016,seasonbinspervc_2016$seasonbin_number==2)
+seasonbinsperbin2A_2016<-head(arrange(seasonbinsperbin2_2016, desc(seasonbinsperbin2_2016$count)),3)
+seasonbinsperbin2A_2016
+
+#seasonbin_number ViolationCode  count
+#1                2            21 471580
+#2                2            38 346719
+#3                2            14 262595
+
+seasonbinsperbin3_2016<-filter(seasonbinspervc,seasonbinspervc$seasonbin_number==3)
+seasonbinsperbin3A_2016<-head(arrange(seasonbinsperbin3, desc(seasonbinsperbin3$count)),3)
+seasonbinsperbin3A_2016
+
+#seasonbin_number ViolationCode  count
+#1                3            21 397871
+#2                3            38 348466
+#3                3            14 234606
+
+seasonbinsperbin4_2016<-filter(seasonbinspervc_2016,seasonbinspervc_2016$seasonbin_number==4)
+seasonbinsperbin4A_2016<-head(arrange(seasonbinsperbin4_2016, desc(seasonbinsperbin4_2016$count)),3)
+seasonbinsperbin4A_2016
+
+#seasonbin_number ViolationCode  count
+#1                4            21 350563
+#2                4            38 292639
+#3                4            14 207397
+
+
+#Q7 The fines collected from all the parking violation constitute a revenue source for the NYC police department. Let’s take an example of estimating that for the 3 most commonly occurring #codes.
+#Find total occurrences of the 3 most common violation codes
+#Then, search the internet for NYC parking violation code fines. You will find a website (on the nyc.gov URL) that lists these fines. They’re divided into two categories, one for the #highest-density locations of the city, the other for the rest of the city. For simplicity, take an average of the two.
+#Using this information, find the total amount collected for all of the fines. State the code which has the highest total collection.
+#What can you intuitively infer from these findings?
+
+parking2016cleanvctop5<-summarize(groupBy(parking2016clean, parking2016clean$ViolationCode),count=n(parking2016clean$ViolationCode),fine=n(parking2016clean$ViolationCode))
+parking2016cleanvctop5sort<-head(arrange(parking2016cleanvctop5, desc(parking2016cleanvctop5$count)),3)
+
+parking2016cleanvctop5sort
+#  ViolationCode   count    fine
+#1            21 1501614 1501614
+#2            38 1324586 1324586
+#3            14  924627  924627
+
+ncol(parking2016cleanvctop5sort)
+#[1] 3
+
+#21 50
+#38 50
+#14 115
+
+parking2016cleanvctop5sort[1,3]<-parking2016cleanvctop5sort[1,3]*50
+parking2016cleanvctop5sort[2,3]<-parking2016cleanvctop5sort[2,3]*50
+parking2016cleanvctop5sort[3,3]<-parking2016cleanvctop5sort[3,3]*115
+sum(parking2016cleanvctop5sort$fine)
+#[1] 247642105
+parking2016cleanvctop5sort
+#ViolationCode   count      fine
+#1            21 1501614  75080700
+#2            38 1324586  66229300
+#3            14  924627 106332105
+
